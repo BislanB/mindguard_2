@@ -236,38 +236,48 @@ select {
 }
 
 /* ── Layout ── */
-.layout {
-  min-height: 100dvh;
+body {
+  background: var(--bg-surface);
+  /* Darker background for monitor */
   display: flex;
-  flex-direction: column
+  justify-content: center;
+}
+
+#app {
+  width: 100%;
+}
+
+.layout {
+  height: 100dvh;
+  /* Fixed height for internal scrolling! */
+  display: flex;
+  flex-direction: column;
+  max-width: var(--max-width);
+  margin: 0 auto;
+  background: var(--bg);
+  box-shadow: var(--shadow-lg);
+  position: relative;
+  overflow: hidden;
 }
 
 .layout__content {
   flex: 1;
-  padding: 20px 20px calc(var(--nav-height) + var(--safe-bottom) + 24px);
-  padding-top: calc(var(--safe-top) + 20px);
-  max-width: var(--max-width);
-  margin: 0 auto;
+  padding: 24px 20px calc(var(--nav-height) + var(--safe-bottom) + 32px);
+  padding-top: calc(var(--safe-top) + 24px);
   width: 100%;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
 
-@media (min-width: 600px) {
-  .layout__content {
-    padding-left: 32px;
-    padding-right: 32px;
-  }
-}
-
 /* ── Bottom Nav ── */
 .nav {
-  position: fixed;
+  position: absolute;
+  /* Absolute relative to .layout */
   bottom: 0;
   left: 0;
-  right: 0;
+  width: 100%;
   z-index: 100;
-  height: calc(var(--nav-height)+var(--safe-bottom));
+  height: calc(var(--nav-height) + var(--safe-bottom));
   padding-bottom: var(--safe-bottom);
   background: var(--glass);
   backdrop-filter: blur(20px) saturate(1.5);
