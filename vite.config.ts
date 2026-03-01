@@ -12,9 +12,9 @@ export default defineConfig({
       manifest: {
         name: 'MindGuard',
         short_name: 'MindGuard',
-        description: 'Mindfulness, daily reports & focus blocker',
-        theme_color: '#6366f1',
-        background_color: '#0f172a',
+        description: 'Трекинг привычек, цифровое благополучие и фокус',
+        theme_color: '#0a0a12',
+        background_color: '#0a0a12',
         display: 'standalone',
         orientation: 'portrait',
         start_url: '/mindguard/',

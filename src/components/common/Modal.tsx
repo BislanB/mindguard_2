@@ -21,6 +21,7 @@ export function Modal({ open, onClose, title, children }: ModalProps) {
   return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal__handle" />
         {title && <div className="modal__title">{title}</div>}
         {children}
       </div>
@@ -35,15 +36,17 @@ interface ConfirmModalProps {
   onCancel: () => void;
   title: string;
   message: string;
+  confirmText?: string;
+  confirmDanger?: boolean;
 }
 
-export function ConfirmModal({ open, onConfirm, onCancel, title, message }: ConfirmModalProps) {
+export function ConfirmModal({ open, onConfirm, onCancel, title, message, confirmText = 'Удалить', confirmDanger = true }: ConfirmModalProps) {
   return (
     <Modal open={open} onClose={onCancel} title={title}>
-      <p style={{ color: 'var(--text-secondary)', fontSize: 14, marginBottom: 16 }}>{message}</p>
+      <p style={{ color: 'var(--text-secondary)', fontSize: 15, marginBottom: 16, lineHeight: 1.5 }}>{message}</p>
       <div className="modal__actions">
-        <button className="btn btn--secondary" style={{ flex: 1 }} onClick={onCancel}>Отмена</button>
-        <button className="btn btn--danger" style={{ flex: 1 }} onClick={onConfirm}>Удалить</button>
+        <button className="btn btn--secondary" onClick={onCancel}>Отмена</button>
+        <button className={`btn ${confirmDanger ? 'btn--danger' : 'btn--primary'}`} onClick={onConfirm}>{confirmText}</button>
       </div>
     </Modal>
   );
