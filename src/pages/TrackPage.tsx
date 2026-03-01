@@ -26,7 +26,7 @@ export function TrackPage() {
     const [saved, setSaved] = useState(false);
     const [activeSlider, setActiveSlider] = useState<string | null>(null);
     const [bouncingValue, setBouncingValue] = useState<string | null>(null);
-    const bounceTimer = useRef<ReturnType<typeof setTimeout>>();
+    const bounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const hour = new Date().getHours();
     const isMorning = hour < 14;
