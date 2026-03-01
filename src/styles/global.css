@@ -244,11 +244,20 @@ select {
 
 .layout__content {
   flex: 1;
-  padding: 16px 16px calc(var(--nav-height)+var(--safe-bottom)+16px);
-  padding-top: calc(var(--safe-top)+16px);
+  padding: 20px 20px calc(var(--nav-height) + var(--safe-bottom) + 24px);
+  padding-top: calc(var(--safe-top) + 20px);
   max-width: var(--max-width);
   margin: 0 auto;
-  width: 100%
+  width: 100%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (min-width: 600px) {
+  .layout__content {
+    padding-left: 32px;
+    padding-right: 32px;
+  }
 }
 
 /* ── Bottom Nav ── */

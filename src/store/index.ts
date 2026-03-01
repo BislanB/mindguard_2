@@ -7,15 +7,25 @@ import { STREAK_MILESTONES } from '../types/index.js';
 import * as db from '../db/index.js';
 import { v4 as uuid } from 'uuid';
 
-// ── Ambient Sound Engine ──
+// ── Ambient Sound Engine (Web Audio API nodes) ──
 let ambientCtx: AudioContext | null = null;
-let ambientSource: AudioBufferSourceNode | null = null;
-let ambientGain: GainNode | null = null;
+let ambientNodes: AudioNode[] = [];
 
 function stopAmbient() {
-  try { ambientSource?.stop(); } catch { }
-  ambientSource = null;
-  if (ambientGain) { try { ambientGain.gain.setValueAtTime(0, ambientCtx?.currentTime ?? 0); } catch { } }
+  for (const n of ambientNodes) {
+    try { if ('stop' in n && typeof (n as any).stop === 'function') (n as any).stop(); } catch { }
+    try { n.disconnect(); } catch { }
+  }
+  ambientNodes = [];
+}
+
+function createNoiseBuffer(ctx: AudioContext, seconds: number): AudioBuffer {
+  const buf = ctx.createBuffer(2, ctx.sampleRate * seconds, ctx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = buf.getChannelData(ch);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  return buf;
 }
 
 async function playAmbient(sound: AmbientSound) {
@@ -23,97 +33,226 @@ async function playAmbient(sound: AmbientSound) {
   if (sound === 'none') return;
 
   if (!ambientCtx) ambientCtx = new AudioContext();
-  // Browser autoplay policy: must resume after user gesture
   if (ambientCtx.state === 'suspended') await ambientCtx.resume();
+  const ctx = ambientCtx;
+  const t = ctx.currentTime;
 
-  ambientGain = ambientCtx.createGain();
-  ambientGain.gain.setValueAtTime(0, ambientCtx.currentTime);
-  ambientGain.gain.linearRampToValueAtTime(0.35, ambientCtx.currentTime + 0.5); // fade in
-  ambientGain.connect(ambientCtx.destination);
+  // Master gain with fade-in
+  const master = ctx.createGain();
+  master.gain.setValueAtTime(0, t);
+  master.gain.linearRampToValueAtTime(0.5, t + 0.8);
+  master.connect(ctx.destination);
+  ambientNodes.push(master);
 
-  const sr = ambientCtx.sampleRate;
-  const duration = 10; // seconds of buffer (loops)
-  const bufferSize = sr * duration;
-  const buffer = ambientCtx.createBuffer(2, bufferSize, sr);
+  if (sound === 'whitenoise') {
+    // Pure white noise — simple and clean
+    const noise = ctx.createBufferSource();
+    noise.buffer = createNoiseBuffer(ctx, 4);
+    noise.loop = true;
+    const g = ctx.createGain();
+    g.gain.value = 0.4;
+    noise.connect(g).connect(master);
+    noise.start();
+    ambientNodes.push(noise, g);
 
-  for (let ch = 0; ch < 2; ch++) {
-    const data = buffer.getChannelData(ch);
+  } else if (sound === 'rain') {
+    // RAIN: highpass-filtered noise (hiss) + pink noise layer
+    const noise = ctx.createBufferSource();
+    noise.buffer = createNoiseBuffer(ctx, 6);
+    noise.loop = true;
+    // Highpass for rain "hiss"
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 800;
+    hp.Q.value = 0.5;
+    const g1 = ctx.createGain();
+    g1.gain.value = 0.35;
+    noise.connect(hp).connect(g1).connect(master);
+    noise.start();
+    // Low rumble layer (distant thunder)
+    const noise2 = ctx.createBufferSource();
+    noise2.buffer = createNoiseBuffer(ctx, 8);
+    noise2.loop = true;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 150;
+    const g2 = ctx.createGain();
+    g2.gain.value = 0.15;
+    noise2.connect(lp).connect(g2).connect(master);
+    noise2.start();
+    ambientNodes.push(noise, hp, g1, noise2, lp, g2);
 
-    if (sound === 'whitenoise') {
-      for (let i = 0; i < bufferSize; i++) {
-        data[i] = (Math.random() * 2 - 1) * 0.5;
-      }
-    } else if (sound === 'rain') {
-      // Rain: filtered white noise with random droplet bursts
-      let brown = 0;
-      for (let i = 0; i < bufferSize; i++) {
-        const white = Math.random() * 2 - 1;
-        brown = (brown + (0.02 * white)) / 1.02;
-        // Random droplets
-        const droplet = Math.random() < 0.001 ? (Math.random() - 0.5) * 2 : 0;
-        data[i] = (brown * 3.5 + white * 0.15 + droplet * 0.5) * 0.7;
-      }
-    } else if (sound === 'forest') {
-      // Forest: gentle wind + occasional bird-like chirps
-      let brown = 0;
-      for (let i = 0; i < bufferSize; i++) {
-        const t = i / sr;
-        const white = Math.random() * 2 - 1;
-        brown = (brown + (0.01 * white)) / 1.01;
-        // Gentle wind
-        const wind = brown * 2.5;
-        // Bird chirp (short sine burst)
-        const chirpFreq = 2000 + Math.sin(t * 0.3 + ch) * 500;
-        const chirpEnv = Math.random() < 0.0003 ? Math.sin(t * chirpFreq) * 0.15 : 0;
-        data[i] = (wind + white * 0.05 + chirpEnv) * 0.6;
-      }
-    } else if (sound === 'waves') {
-      // Ocean waves: slow amplitude modulation on filtered noise
-      let brown = 0;
-      for (let i = 0; i < bufferSize; i++) {
-        const t = i / sr;
-        const white = Math.random() * 2 - 1;
-        brown = (brown + (0.015 * white)) / 1.015;
-        // Slow wave envelope (6-10 second cycle)
-        const wave = (Math.sin(t * 0.7 + ch * 0.5) * 0.5 + 0.5) *
-          (Math.sin(t * 0.3) * 0.3 + 0.7);
-        data[i] = (brown * 4 * wave + white * 0.05 * wave) * 0.6;
-      }
-    } else if (sound === 'fire') {
-      // Fire: crackle noise + low rumble
-      let brown = 0;
-      for (let i = 0; i < bufferSize; i++) {
-        const white = Math.random() * 2 - 1;
-        brown = (brown + (0.03 * white)) / 1.03;
-        // Random crackles
-        const crackle = Math.random() < 0.003 ? white * 1.5 : 0;
-        // Low rumble
-        const rumble = Math.sin(i / sr * 40 + ch) * 0.1;
-        data[i] = (brown * 2.5 + crackle * 0.4 + rumble + white * 0.08) * 0.5;
-      }
-    } else if (sound === 'cafe') {
-      // Cafe: layered murmurs + gentle clinking
-      let brown = 0;
-      for (let i = 0; i < bufferSize; i++) {
-        const t = i / sr;
-        const white = Math.random() * 2 - 1;
-        brown = (brown + (0.025 * white)) / 1.025;
-        // Voice-like modulation (multiple low frequencies)
-        const murmur = Math.sin(t * 120 + ch) * 0.05 +
-          Math.sin(t * 180) * 0.04 +
-          Math.sin(t * 95 + ch * 2) * 0.03;
-        // Occasional clink
-        const clink = Math.random() < 0.0005 ? Math.sin(t * 4000) * 0.2 * Math.exp(-(i % 1000) * 0.01) : 0;
-        data[i] = (brown * 2.5 + murmur + clink + white * 0.06) * 0.55;
-      }
+  } else if (sound === 'waves') {
+    // WAVES: noise modulated by slow LFO (amplitude goes up and down like waves)
+    const noise = ctx.createBufferSource();
+    noise.buffer = createNoiseBuffer(ctx, 10);
+    noise.loop = true;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'lowpass';
+    bp.frequency.value = 400;
+    bp.Q.value = 1;
+    // LFO to modulate amplitude (wave rhythm)
+    const lfo = ctx.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.value = 0.12; // ~8 second wave cycle
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = 0.25;
+    const waveGain = ctx.createGain();
+    waveGain.gain.value = 0.3;
+    lfo.connect(lfoGain).connect(waveGain.gain);
+    noise.connect(bp).connect(waveGain).connect(master);
+    lfo.start();
+    noise.start();
+    // High hiss layer (foam)
+    const foam = ctx.createBufferSource();
+    foam.buffer = createNoiseBuffer(ctx, 5);
+    foam.loop = true;
+    const foamHp = ctx.createBiquadFilter();
+    foamHp.type = 'highpass';
+    foamHp.frequency.value = 2000;
+    const foamGain = ctx.createGain();
+    foamGain.gain.value = 0.08;
+    const foamLfo = ctx.createGain();
+    foamLfo.gain.value = 0.06;
+    lfo.connect(foamLfo).connect(foamGain.gain);
+    foam.connect(foamHp).connect(foamGain).connect(master);
+    foam.start();
+    ambientNodes.push(noise, bp, lfo, lfoGain, waveGain, foam, foamHp, foamGain, foamLfo);
+
+  } else if (sound === 'forest') {
+    // FOREST: very gentle wind (bandpass noise) + bird chirps (high oscillators)
+    const noise = ctx.createBufferSource();
+    noise.buffer = createNoiseBuffer(ctx, 8);
+    noise.loop = true;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 300;
+    bp.Q.value = 0.3;
+    const windGain = ctx.createGain();
+    windGain.gain.value = 0.12;
+    noise.connect(bp).connect(windGain).connect(master);
+    noise.start();
+    // Bird chirps: multiple high-frequency oscillators with tremolo
+    for (let b = 0; b < 3; b++) {
+      const bird = ctx.createOscillator();
+      bird.type = 'sine';
+      bird.frequency.value = 2500 + b * 800; // 2500, 3300, 4100 Hz
+      // Tremolo (on-off modulation)
+      const trem = ctx.createOscillator();
+      trem.type = 'square';
+      trem.frequency.value = 3 + b * 2; // fast on-off
+      const tremGain = ctx.createGain();
+      tremGain.gain.value = 0.02; // quiet birds
+      const birdGain = ctx.createGain();
+      birdGain.gain.value = 0;
+      trem.connect(tremGain).connect(birdGain.gain);
+      bird.connect(birdGain).connect(master);
+      // Random volume envelope via slow LFO
+      const env = ctx.createOscillator();
+      env.type = 'sine';
+      env.frequency.value = 0.05 + b * 0.03; // very slow
+      const envGain = ctx.createGain();
+      envGain.gain.value = 0.015;
+      env.connect(envGain).connect(birdGain.gain);
+      bird.start(); trem.start(); env.start();
+      ambientNodes.push(bird, trem, tremGain, birdGain, env, envGain);
     }
-  }
+    // Leaves rustling: very high bandpass noise
+    const leaves = ctx.createBufferSource();
+    leaves.buffer = createNoiseBuffer(ctx, 5);
+    leaves.loop = true;
+    const leavesBp = ctx.createBiquadFilter();
+    leavesBp.type = 'highpass';
+    leavesBp.frequency.value = 3000;
+    const leavesGain = ctx.createGain();
+    leavesGain.gain.value = 0.04;
+    leaves.connect(leavesBp).connect(leavesGain).connect(master);
+    leaves.start();
+    ambientNodes.push(noise, bp, windGain, leaves, leavesBp, leavesGain);
 
-  ambientSource = ambientCtx.createBufferSource();
-  ambientSource.buffer = buffer;
-  ambientSource.loop = true;
-  ambientSource.connect(ambientGain);
-  ambientSource.start();
+  } else if (sound === 'fire') {
+    // FIRE: low rumble + crackle (lowpass noise + sharp filtered bursts)
+    const noise = ctx.createBufferSource();
+    noise.buffer = createNoiseBuffer(ctx, 6);
+    noise.loop = true;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 200;
+    lp.Q.value = 2;
+    const rumbleGain = ctx.createGain();
+    rumbleGain.gain.value = 0.35;
+    noise.connect(lp).connect(rumbleGain).connect(master);
+    noise.start();
+    // Crackle: highpass noise with random volume envelope
+    const crack = ctx.createBufferSource();
+    crack.buffer = createNoiseBuffer(ctx, 8);
+    crack.loop = true;
+    const crackHp = ctx.createBiquadFilter();
+    crackHp.type = 'highpass';
+    crackHp.frequency.value = 4000;
+    const crackGain = ctx.createGain();
+    crackGain.gain.value = 0.15;
+    // Modulate crackle volume randomly
+    const crackLfo = ctx.createOscillator();
+    crackLfo.type = 'sawtooth';
+    crackLfo.frequency.value = 7;
+    const crackLfoGain = ctx.createGain();
+    crackLfoGain.gain.value = 0.1;
+    crackLfo.connect(crackLfoGain).connect(crackGain.gain);
+    crack.connect(crackHp).connect(crackGain).connect(master);
+    crack.start(); crackLfo.start();
+    // Mid warmth
+    const warm = ctx.createOscillator();
+    warm.type = 'sine';
+    warm.frequency.value = 80;
+    const warmGain = ctx.createGain();
+    warmGain.gain.value = 0.06;
+    warm.connect(warmGain).connect(master);
+    warm.start();
+    ambientNodes.push(noise, lp, rumbleGain, crack, crackHp, crackGain, crackLfo, crackLfoGain, warm, warmGain);
+
+  } else if (sound === 'cafe') {
+    // CAFE: mid-frequency murmur + distinct high clinking
+    const noise = ctx.createBufferSource();
+    noise.buffer = createNoiseBuffer(ctx, 8);
+    noise.loop = true;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 500;
+    bp.Q.value = 0.8;
+    const murmurGain = ctx.createGain();
+    murmurGain.gain.value = 0.25;
+    noise.connect(bp).connect(murmurGain).connect(master);
+    noise.start();
+    // Voice-like modulation
+    const voiceLfo = ctx.createOscillator();
+    voiceLfo.type = 'sine';
+    voiceLfo.frequency.value = 0.4;
+    const voiceLfoGain = ctx.createGain();
+    voiceLfoGain.gain.value = 0.1;
+    voiceLfo.connect(voiceLfoGain).connect(murmurGain.gain);
+    voiceLfo.start();
+    // Clinking sounds: high sine oscillators
+    const clink1 = ctx.createOscillator();
+    clink1.type = 'sine';
+    clink1.frequency.value = 3800;
+    const clink2 = ctx.createOscillator();
+    clink2.type = 'sine';
+    clink2.frequency.value = 4200;
+    const clinkGain = ctx.createGain();
+    clinkGain.gain.value = 0;
+    const clinkLfo = ctx.createOscillator();
+    clinkLfo.type = 'square';
+    clinkLfo.frequency.value = 0.3; // occasional dings
+    const clinkLfoGain = ctx.createGain();
+    clinkLfoGain.gain.value = 0.012;
+    clinkLfo.connect(clinkLfoGain).connect(clinkGain.gain);
+    clink1.connect(clinkGain);
+    clink2.connect(clinkGain);
+    clinkGain.connect(master);
+    clink1.start(); clink2.start(); clinkLfo.start();
+    ambientNodes.push(noise, bp, murmurGain, voiceLfo, voiceLfoGain, clink1, clink2, clinkGain, clinkLfo, clinkLfoGain);
+  }
 }
 
 // ── Sound Effects ──
