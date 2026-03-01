@@ -8,3 +8,9 @@ ReactDOM.createRoot(document.getElementById('app')!).render(
     <App />
   </React.StrictMode>,
 );
+
+// 🚀 Forces a module reload for Vite
+if (import.meta.hot) {
+  import.meta.hot.accept();
+}
+console.log('App loaded');
