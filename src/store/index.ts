@@ -11,88 +11,138 @@ import { v4 as uuid } from 'uuid';
 let ambientCtx: AudioContext | null = null;
 let ambientSource: AudioBufferSourceNode | null = null;
 let ambientGain: GainNode | null = null;
-let ambientOsc: OscillatorNode | null = null;
 
 function stopAmbient() {
   try { ambientSource?.stop(); } catch { }
-  try { ambientOsc?.stop(); } catch { }
-  ambientSource = null; ambientOsc = null;
+  ambientSource = null;
+  if (ambientGain) { try { ambientGain.gain.setValueAtTime(0, ambientCtx?.currentTime ?? 0); } catch { } }
 }
 
-function playAmbient(sound: AmbientSound) {
+async function playAmbient(sound: AmbientSound) {
   stopAmbient();
   if (sound === 'none') return;
+
   if (!ambientCtx) ambientCtx = new AudioContext();
+  // Browser autoplay policy: must resume after user gesture
+  if (ambientCtx.state === 'suspended') await ambientCtx.resume();
+
   ambientGain = ambientCtx.createGain();
-  ambientGain.gain.value = 0.15;
+  ambientGain.gain.setValueAtTime(0, ambientCtx.currentTime);
+  ambientGain.gain.linearRampToValueAtTime(0.35, ambientCtx.currentTime + 0.5); // fade in
   ambientGain.connect(ambientCtx.destination);
 
-  // Generate procedural ambient sounds
-  if (sound === 'whitenoise') {
-    const bufferSize = ambientCtx.sampleRate * 10;
-    const buffer = ambientCtx.createBuffer(1, bufferSize, ambientCtx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * 0.3;
-    ambientSource = ambientCtx.createBufferSource();
-    ambientSource.buffer = buffer;
-    ambientSource.loop = true;
-    ambientSource.connect(ambientGain);
-    ambientSource.start();
-  } else {
-    // Low-frequency ambient: different frequencies for different "environments"
-    const freqs: Record<string, number[]> = {
-      rain: [120, 180, 240], forest: [200, 320, 500], cafe: [150, 250, 380],
-      waves: [80, 130, 200], fire: [100, 160, 220],
-    };
-    const f = freqs[sound] || [150, 250];
-    // Create brownian noise with filtering for natural sound
-    const bufferSize = ambientCtx.sampleRate * 8;
-    const buffer = ambientCtx.createBuffer(2, bufferSize, ambientCtx.sampleRate);
-    for (let ch = 0; ch < 2; ch++) {
-      const data = buffer.getChannelData(ch);
-      let last = 0;
-      const speed = sound === 'waves' ? 0.03 : sound === 'rain' ? 0.08 : 0.05;
+  const sr = ambientCtx.sampleRate;
+  const duration = 10; // seconds of buffer (loops)
+  const bufferSize = sr * duration;
+  const buffer = ambientCtx.createBuffer(2, bufferSize, sr);
+
+  for (let ch = 0; ch < 2; ch++) {
+    const data = buffer.getChannelData(ch);
+
+    if (sound === 'whitenoise') {
       for (let i = 0; i < bufferSize; i++) {
-        const t = i / ambientCtx.sampleRate;
-        let val = 0;
-        for (const freq of f) val += Math.sin(t * freq * 0.01 + ch) * 0.1;
-        val += (Math.random() * 2 - 1) * speed;
-        last = last * 0.98 + val * 0.02;
-        data[i] = last * 0.5;
+        data[i] = (Math.random() * 2 - 1) * 0.5;
+      }
+    } else if (sound === 'rain') {
+      // Rain: filtered white noise with random droplet bursts
+      let brown = 0;
+      for (let i = 0; i < bufferSize; i++) {
+        const white = Math.random() * 2 - 1;
+        brown = (brown + (0.02 * white)) / 1.02;
+        // Random droplets
+        const droplet = Math.random() < 0.001 ? (Math.random() - 0.5) * 2 : 0;
+        data[i] = (brown * 3.5 + white * 0.15 + droplet * 0.5) * 0.7;
+      }
+    } else if (sound === 'forest') {
+      // Forest: gentle wind + occasional bird-like chirps
+      let brown = 0;
+      for (let i = 0; i < bufferSize; i++) {
+        const t = i / sr;
+        const white = Math.random() * 2 - 1;
+        brown = (brown + (0.01 * white)) / 1.01;
+        // Gentle wind
+        const wind = brown * 2.5;
+        // Bird chirp (short sine burst)
+        const chirpFreq = 2000 + Math.sin(t * 0.3 + ch) * 500;
+        const chirpEnv = Math.random() < 0.0003 ? Math.sin(t * chirpFreq) * 0.15 : 0;
+        data[i] = (wind + white * 0.05 + chirpEnv) * 0.6;
+      }
+    } else if (sound === 'waves') {
+      // Ocean waves: slow amplitude modulation on filtered noise
+      let brown = 0;
+      for (let i = 0; i < bufferSize; i++) {
+        const t = i / sr;
+        const white = Math.random() * 2 - 1;
+        brown = (brown + (0.015 * white)) / 1.015;
+        // Slow wave envelope (6-10 second cycle)
+        const wave = (Math.sin(t * 0.7 + ch * 0.5) * 0.5 + 0.5) *
+          (Math.sin(t * 0.3) * 0.3 + 0.7);
+        data[i] = (brown * 4 * wave + white * 0.05 * wave) * 0.6;
+      }
+    } else if (sound === 'fire') {
+      // Fire: crackle noise + low rumble
+      let brown = 0;
+      for (let i = 0; i < bufferSize; i++) {
+        const white = Math.random() * 2 - 1;
+        brown = (brown + (0.03 * white)) / 1.03;
+        // Random crackles
+        const crackle = Math.random() < 0.003 ? white * 1.5 : 0;
+        // Low rumble
+        const rumble = Math.sin(i / sr * 40 + ch) * 0.1;
+        data[i] = (brown * 2.5 + crackle * 0.4 + rumble + white * 0.08) * 0.5;
+      }
+    } else if (sound === 'cafe') {
+      // Cafe: layered murmurs + gentle clinking
+      let brown = 0;
+      for (let i = 0; i < bufferSize; i++) {
+        const t = i / sr;
+        const white = Math.random() * 2 - 1;
+        brown = (brown + (0.025 * white)) / 1.025;
+        // Voice-like modulation (multiple low frequencies)
+        const murmur = Math.sin(t * 120 + ch) * 0.05 +
+          Math.sin(t * 180) * 0.04 +
+          Math.sin(t * 95 + ch * 2) * 0.03;
+        // Occasional clink
+        const clink = Math.random() < 0.0005 ? Math.sin(t * 4000) * 0.2 * Math.exp(-(i % 1000) * 0.01) : 0;
+        data[i] = (brown * 2.5 + murmur + clink + white * 0.06) * 0.55;
       }
     }
-    ambientSource = ambientCtx.createBufferSource();
-    ambientSource.buffer = buffer;
-    ambientSource.loop = true;
-    ambientSource.connect(ambientGain);
-    ambientSource.start();
   }
+
+  ambientSource = ambientCtx.createBufferSource();
+  ambientSource.buffer = buffer;
+  ambientSource.loop = true;
+  ambientSource.connect(ambientGain);
+  ambientSource.start();
 }
 
 // ── Sound Effects ──
-function playSound(type: 'complete' | 'click' | 'success' | 'warning') {
+async function playSound(type: 'complete' | 'click' | 'success' | 'warning') {
   try {
     const ctx = new AudioContext();
+    if (ctx.state === 'suspended') await ctx.resume();
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.connect(gain); gain.connect(ctx.destination);
-    gain.gain.value = 0.2;
+    gain.gain.value = 0.3;
     if (type === 'complete') {
       osc.frequency.setValueAtTime(523, ctx.currentTime);
       osc.frequency.setValueAtTime(659, ctx.currentTime + 0.15);
       osc.frequency.setValueAtTime(784, ctx.currentTime + 0.3);
       osc.start(); osc.stop(ctx.currentTime + 0.5);
     } else if (type === 'click') {
-      osc.frequency.value = 600; gain.gain.value = 0.1;
-      osc.start(); osc.stop(ctx.currentTime + 0.05);
+      osc.frequency.value = 800; gain.gain.value = 0.15;
+      osc.start(); osc.stop(ctx.currentTime + 0.06);
     } else if (type === 'success') {
       osc.frequency.setValueAtTime(440, ctx.currentTime);
       osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15);
       osc.start(); osc.stop(ctx.currentTime + 0.3);
     } else {
-      osc.frequency.value = 300; osc.type = 'square'; gain.gain.value = 0.15;
+      osc.frequency.value = 300; osc.type = 'square'; gain.gain.value = 0.2;
       osc.start(); osc.stop(ctx.currentTime + 0.2);
     }
+    // Cleanup after sound plays
+    osc.onended = () => ctx.close();
   } catch { }
 }
 
